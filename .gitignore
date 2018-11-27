@@ -6,3 +6,6 @@ data/regev_lab_cell_cycle_genes.txt
 data/Table S2_TissueProteome_imputed.txt
 data/Table S1_AllMarkersCelltypes.txt
 data/raw_counts_whole_lung_bulk.txt
+data/DE_Minibulk_EP.csv
+data/DE_Minibulk_MAC.csv
+data/Table S6_SingleCell_DGE.xlsx

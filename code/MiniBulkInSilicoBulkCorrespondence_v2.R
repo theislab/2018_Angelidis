@@ -9,47 +9,37 @@ library(ggrepel)
 library(limma)
 library(edgeR)
 library(mcr)
+library(readxl)
 
 # Load Aging Seurat object ####
-load("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/SeuratObject.RData")
+load("../data/SeuratObject.RData")
 
 # Load count table ####
-fc <- read.table("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/fcCounts", header = T)
+fc <- read.table("../data/raw_counts_flow_sorted_bulk.txt", header = T)
 counts <- fc[, -c(1:6)]
-colnames(counts) <- gsub("STARalignmentOutputs.", "", fixed = T, colnames(counts))
-colnames(counts) <- gsub("Aligned.sortedByCoord.out.bam", "", fixed = T, colnames(counts))
 rownames(counts) <- fc[,1]
+counts <- data.matrix(counts)
 
 # Define treatment vectors ####
-treat <- read.csv(file = "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/MiniBulk_sampleinfo.csv")
-tmp <- do.call(rbind, lapply(as.character(treat[,2]), function(x) strsplit(x, "_", fixed = T)[[1]]))
-tmp[,1] <- unlist(lapply(tmp[,1], function(x) substr(x, 0, 1)))
-colnames(tmp) <- c("age", "celltype")
-rownames(tmp) <- treat[,1]
-treat <- data.frame(tmp)
-
-# Merge treatment and counts ####
-ok <- intersect(rownames(treat), colnames(counts))
-counts <- counts[, ok]
-treat <- treat[ok,]
-
-# Remove samples without enough reads ####
-bad <- which(colSums(counts) < 1e6)
-counts <- counts[,-bad]
-treat <- treat[-bad,]
+treat <- do.call(rbind, lapply(colnames(counts), function(x) strsplit(x, "_", fixed = T)[[1]]))
+rownames(treat) <- colnames(counts)
+treat <- treat[, c(1, 3)]
+colnames(treat) <- c("age", "celltype")
+treat$celltype <- gsub("epi", "EP", treat$celltype)
+treat$celltype <- gsub("mac", "MAC", treat$celltype)
+treat <- data.frame(treat)
 
 # Get gene symbols ####
 ensembl <- useMart(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
 t2g <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"), mart = ensembl)
 t2g <- t2g[which(t2g$ensembl_gene_id %in% rownames(counts)),]
 
-# Calculate in silico bulks per mouse ####
+# Calculate single celltype in silico bulks per mouse ####
 clusters <- list(c("Type_2_pneumocytes"), c("Alveolar_macrophage"))
 pseudobulks <- lapply(clusters, function(x){
   cells <- rownames(seu.ica@meta.data)[which(seu.ica@meta.data$celltype %in% x)]
   subset <- SubsetData(seu.ica, cells.use = cells)
   asplit <- split(1:nrow(subset@meta.data), subset@meta.data$identifier)
-  #asplit <- lapply(asplit, function(x) sample(x, 30, replace = T))
   means <- do.call(cbind, lapply(asplit, function(x) Matrix::rowSums(subset@data[, x])))
   means
 })
@@ -58,7 +48,7 @@ colnames(tmp) <- paste(colnames(tmp), c(rep("EP", 15), rep("MAC", 15)))
 pseudobulks <- tmp
 
 # Load scRNA-seq marker genes ####
-markers <- read.table("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/Table S1_AllMarkersCelltypes.txt", sep = "\t", header = T)
+markers <- read.table("../data/Table S1_AllMarkersCelltypes.txt", sep = "\t", header = T)
 markers <- markers[which(markers$cluster %in% c("Type_2_pneumocytes","Alveolar_macrophage")),]
 markers <- unique(as.character(markers$gene[which(markers$p_val_adj < 0.1 & markers$avg_logFC > 0)]))
 
@@ -77,8 +67,8 @@ norm2 <- function(matr){
   tmp <- voom(matr)$E
   t(apply(tmp, 1, function(x) (x - mean(x))/sd(x)))
 }
-pca <- prcomp(t(norm(pseudobulks_ok)))
-preds <- predict(pca, t(norm(counts_ok)))
+pca <- prcomp(t(norm2(pseudobulks_ok)))
+preds <- predict(pca, t(norm2(counts_ok)))
 
 # Plot PCA ####
 farben <- c("#F1BB7B", "#FD6467")
@@ -100,16 +90,6 @@ ok <- c("Sftpc", "Ear2", "Ccl6", "Mrc1", "Cd68", "Itgb2", "Itgax", "Scd1", "Sftp
 loadings_plot <- p + geom_point(data = tmp[ok, ], aes(x=PC1, PC2), color="red") + geom_text_repel(data = tmp[ok, ], aes(label = symbol), color = "black") + ggtitle("Loadings")
 
 p_final <- grid.arrange(pca_plot, loadings_plot, ncol = 2)
-ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/MinibulkPCA.pdf", plot = p_final, height = 5, width = 11)
-
-# Plot correlation heatmap ####
-correl <- cor(pseudobulks_ok, counts_ok, method = "spearman")
-anno_row <- data.frame(celltype = treat_pb$celltype)
-rownames(anno_row) <- rownames(correl)
-anno_col <- data.frame(celltype = treat_mb)
-rownames(anno_col) <- colnames(correl)
-ann_colors <- list(celltype = farben)
-pheatmap(correl, annotation_col = anno_col, annotation_row = anno_row, annotation_colors = ann_colors, show_rownames = F, show_colnames = F)
 
 # Match bulk and sc all genes ####
 ok <- intersect(rownames(pseudobulks), t2g$external_gene_name)
@@ -118,7 +98,7 @@ ok <- t2g$ensembl_gene_id[match(ok, t2g$external_gene_name)]
 counts_ok <- counts[ok,]
 rownames(counts_ok) <- rownames(pseudobulks_ok)
 
-# Calculate differential expression ####
+# Calculate differential expression using limma ####
 runRegression <- function(matr, treat){
   matr <- matr[-which(rowSums(matr) == 0),]
   matr <- DGEList(round(matr))
@@ -135,25 +115,33 @@ res_mb_ep <- runRegression(counts_ok[, ok], treat$age[ok])
 ok <- which(treat_mb == "MAC")
 res_mb_mac <- runRegression(counts_ok[, ok], treat$age[ok])
 
-write.csv(res_mb_ep, file = "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/Minibulk_EP.csv")
-write.csv(res_mb_mac, file = "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/Minibulk_MAC.csv")
+# Caculate differential expression using DESeq2 ####
+runRegression2 <- function(matr, treat){
+  des <- DESeqDataSetFromMatrix(countData = round(matr), colData = data.frame(treat), design = ~ treat)
+  des <- DESeq(des)
+  res <- results(des, contrast = c("treat", "A", "Y"))
+  res
+}
+ok <- which(treat_mb == "EP")
+res_mb_ep <- runRegression2(counts_ok[, ok], treat$age[ok])
+ok <- which(treat_mb == "MAC")
+res_mb_mac <- runRegression2(counts_ok[, ok], treat$age[ok])
+
 
 # Compare to cell type resolved fold changes ####
-sc_de <- read.delim("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/AllDEtable.txt")
+sc_de <- read_excel("../data/Table S6_SingleCell_DGE.xlsx", sheet = 1)
 
-pdf(useDingbats = F, "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/MinibulkScatterplot.pdf", width = 12.6, height = 7)
 par(mfrow = c(1, 2))
 ok <- grep("Alveolar_macrophage", colnames(sc_de))
-tmp <- as.data.frame(sc_de[,ok])
+tmp <- data.frame(data.matrix(as.data.frame(sc_de[,ok])))
+rownames(tmp) <- sc_de$`Gene name`
 tmp <- tmp[which(!is.na(tmp$Alveolar_macrophage.avg_logFC)),]
 tmp <- tmp[which(tmp$Alveolar_macrophage.p_val < 0.1),]
 ok <- intersect(rownames(tmp), rownames(res_mb_mac))
 aframe_mac <- data.frame(tmp[ok,], res_mb_mac[ok,])
 smoothScatter(aframe_mac[, "logFC"], aframe_mac[, "Alveolar_macrophage.avg_logFC"], main = "Alveolar macrophages", xlab = "Mini bulk", ylab = "scRNA-seq", col = rgb(0, 0, 0, 0.5), pch = 19)
 dem.reg <- mcreg(aframe_mac[, "logFC"], aframe_mac[, "Alveolar_macrophage.avg_logFC"], method.reg = "Deming")
-#abline(dem.reg@para[1:2], col = "blue")
 abline(v = 0, h = 0)
-#fish <- cor.test(aframe_mac[, "Alveolar_macrophage.avg_logFC"], aframe_mac[, 'logFC'], method = "spearman")
 fish <- fisher.test(table(aframe_mac[, "Alveolar_macrophage.avg_logFC"] > 0, aframe_mac[, 'logFC'] > 0))
 legend("bottomright", paste("Fisher P:", signif(fish$p.value, 2),"OR:", signif(fish$estimate, 2)), bty = "n")
 genes <- c("Marco", "Awat1", "Cebpb", "Fabp1", "Atp1b1", "mt-Cytb")
@@ -168,9 +156,7 @@ ok <- intersect(rownames(tmp), rownames(res_mb_ep))
 aframe_ep <- data.frame(tmp[ok,], res_mb_ep[ok,])
 smoothScatter(aframe_ep[, "logFC"], aframe_ep[, "Type_2_pneumocytes.avg_logFC"], main = "Type 2 pneumocytes", xlab = "Mini bulk", ylab = "scRNA-seq", col = rgb(0, 0, 0, 0.5), pch = 19)
 dem.reg <- mcreg(aframe_ep[, "logFC"], aframe_ep[, "Type_2_pneumocytes.avg_logFC"], method.reg = "Deming")
-#abline(dem.reg@para[1:2], col = "blue")
 abline(v = 0, h = 0)
-#fish <- cor.test(aframe_ep[, "logFC"], aframe_ep[, "Type_2_pneumocytes.avg_logFC"], method = "spearman")
 fish <- fisher.test(table(aframe_ep[, "logFC"] > 0, aframe_ep[, "Type_2_pneumocytes.avg_logFC"] > 0))
 legend("bottomright", paste("Fisher P:", signif(fish$p.value, 2),"OR:", signif(fish$estimate, 2)), bty = "n")
 genes <- c("Lyz1", "B2m", "Scd1", "H2-Q7", "mt-Nd3", "Sparc", "Scd1", "H2-K1")
@@ -178,6 +164,7 @@ text(aframe_ep[genes, "logFC"], aframe_ep[genes, "Type_2_pneumocytes.avg_logFC"]
 or_ep <- c(fish$estimate, fish$conf.int[1:2])
 dev.off()
 
+# Plot enrichment odds ratio ####
 tmp <- data.frame(rbind(or_mac, or_ep))
 tmp$cell <- c("mac", "ep")
 colnames(tmp) <- c("OR", "low", "high", "cell")
@@ -187,9 +174,8 @@ ggplot(tmp, aes(x = OR, y = cell)) + geom_vline(aes(xintercept = 0), size = .25,
   theme_bw()+
   theme(panel.grid.minor = element_blank()) +
   xlab("Odds ratio")
-ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/OddsRatioMiniBulkDE.pdf", height = 5, width = 6)
 
-
+# Save regression results ####
 write.csv(aframe_mac, file = "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/Minibulk_MAC_wSC.csv",quote = F)
 write.csv(aframe_ep, file = "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/Minibulk_EP_wSC.csv",quote = F)
 
@@ -234,16 +220,5 @@ VlnPlot(SubsetData(seu.ica, subset.name = "celltype", accept.value = "Alveolar_m
 ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/Atp1b1_vlnPlot.pdf")
 VlnPlot(SubsetData(seu.ica, subset.name = "celltype", accept.value = "Alveolar_macrophage"), features.plot = c("mt-Cytb"),group.by = "grouping", cols.use = c("blue", "red"))
 ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/mt-Cytb_vlnPlot.pdf")
-
-runRegression2 <- function(matr, treat){
-  des <- DESeqDataSetFromMatrix(countData = round(matr), colData = data.frame(treat), design = ~ treat)
-  des <- DESeq(des)
-  res <- results(des, contrast = c("treat", "A", "Y"))
-  res
-}
-ok <- which(treat_mb == "EP")
-res_mb_ep <- runRegression2(counts_ok[, ok], treat$age[ok])
-ok <- which(treat_mb == "MAC")
-res_mb_mac <- runRegression2(counts_ok[, ok], treat$age[ok])
 
 
