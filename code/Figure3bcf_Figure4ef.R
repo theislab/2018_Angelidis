@@ -1,7 +1,6 @@
 # R code
 # Lukas Simon
-# Wed Nov 21st 2018
-# This code will compare real and in silico bulk data
+# This code will generate panels for Figure 3
 
 # Load R libraries ####
 library(biomaRt)
@@ -9,6 +8,7 @@ library(limma)
 library(Seurat)
 library(pheatmap)
 library(preprocessCore)
+library(corrplot)
 
 # Load whole lung bulk expression ####
 fc <- read.table("../data/raw_counts_whole_lung_bulk.txt", header = T)
@@ -31,7 +31,6 @@ t2g <- t2g[which(t2g$ensembl_gene_id %in% rownames(bulk)),]
 # Save DE result table ####
 res$symbol <- t2g$external_gene_name[match(rownames(res), t2g$ensembl_gene_id)]
 final <- data.frame(res, counts(des, normalized = T))
-write.csv(final, file = '../data/DESeq2_wholeLung_DE.csv', quote = F)
 
 # Perform bulk deconvolution on whole lung results ####
 markers <- read.delim('../data/Table S1_AllMarkersCelltypes.txt')
@@ -50,10 +49,12 @@ tmp[which(tmp[,2] < 1e-50), 2] <- 1e-50
 tmp <- data.frame(tmp)
 tmp$celltype <- rownames(tmp)
 
+# Generate Fig 4e ####
 ggplot(tmp, aes(fc_diff, -log10(pval))) + geom_point() +
   geom_text_repel(data = tmp, aes(label = celltype), color = "black", size = 3) +
   geom_vline(xintercept = 0)
 
+# Generate Fig 4f ####
 genECDFplot2 <- function(celltype){
   ok <- intersect(schiller_genes[[celltype]], res$symbol)
   type <- rep('Rest', nrow(res))
@@ -77,13 +78,14 @@ age_insilico <- gsub("24m", "old", age_insilico)
 ok <- intersect(rownames(insilico), t2g$external_gene_name)
 tmp <- bulk[t2g$ensembl_gene_id[match(ok, t2g$external_gene_name)], ]
 
+# Generate Fig 3b - part 1 ####
 tmp2 <- cbind(tmp, insilico[ok, ])
 correl <- cor(tmp2, method = 'spearman')
 corrplot(correl, method = 'ellipse', type = 'upper', cl.lim = c(0,1))
 
+# Generate Fig 3b - part 2 ####
 insilico_means <- rowMeans(insilico[ok,])
 bulk_means <- rowMeans(tmp)
-
 plot(log(insilico_means), log(bulk_means), col = rgb(0, 0, 0, 0.5), pch = 19, xlab = 'Average in silico bulk [log]', ylab = 'Average whole lung bulk [log]')
 cor.test(log(insilico_means), log(bulk_means), method = 'spearman')
 dem.reg <- mcreg(log(insilico_means), log(bulk_means), method.reg = "Deming")
@@ -130,6 +132,7 @@ names(shape) <- c("bulk", "insilico", "protein")
 # Calculate PCA ####
 pca <- prcomp(t(merged))
 
+# Generate Fig 3c ####
 par(mfrow = c(1, 2))
 plot(pca$x[,1:2], col = farben[age], pch = shape[batch])
 legend("bottomright", c(names(farben), names(shape)), pch = c(16, 16, shape), bty = "n", col = c("blue", "red", "black", "black", "black"))
@@ -138,7 +141,7 @@ plot(pca$x[,2:3], col = farben[age], pch = shape[batch])
 legend("bottomleft", c(names(farben), names(shape)), pch = c(16, 16, shape), bty = "n", col = c("blue", "red", "black", "black", "black"))
 abline(h = 0)
 
-# Generate Col4a plot ####
+# Generate Fig 3f ####
 col4a_genes <- c('Col4a1', 'Col4a2', 'Col4a3', 'Col4a4', 'Col4a5', 'Col4a6')
 norm1 <- function(matr, treat){
   t(apply(matr, 1, function(x) (x - mean(x))/sd(x)))

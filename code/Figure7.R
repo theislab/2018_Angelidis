@@ -1,3 +1,7 @@
+# R code
+# Lukas Simon
+# This code will generate Figure 7
+
 # Load R libraries ####
 library(Seurat)
 library(DESeq2)
@@ -23,7 +27,7 @@ counts <- data.matrix(counts)
 # Define treatment vectors ####
 treat <- do.call(rbind, lapply(colnames(counts), function(x) strsplit(x, "_", fixed = T)[[1]]))
 rownames(treat) <- colnames(counts)
-treat <- treat[, c(1, 3)]
+treat <- data.frame(treat[, c(1, 3)])
 colnames(treat) <- c("age", "celltype")
 treat$celltype <- gsub("epi", "EP", treat$celltype)
 treat$celltype <- gsub("mac", "MAC", treat$celltype)
@@ -70,7 +74,7 @@ norm2 <- function(matr){
 pca <- prcomp(t(norm2(pseudobulks_ok)))
 preds <- predict(pca, t(norm2(counts_ok)))
 
-# Plot PCA ####
+# Generate Fig 7d and e ####
 farben <- c("#F1BB7B", "#FD6467")
 names(farben) <- c("EP", "MAC")
 
@@ -115,26 +119,13 @@ res_mb_ep <- runRegression(counts_ok[, ok], treat$age[ok])
 ok <- which(treat_mb == "MAC")
 res_mb_mac <- runRegression(counts_ok[, ok], treat$age[ok])
 
-# Caculate differential expression using DESeq2 ####
-runRegression2 <- function(matr, treat){
-  des <- DESeqDataSetFromMatrix(countData = round(matr), colData = data.frame(treat), design = ~ treat)
-  des <- DESeq(des)
-  res <- results(des, contrast = c("treat", "A", "Y"))
-  res
-}
-ok <- which(treat_mb == "EP")
-res_mb_ep <- runRegression2(counts_ok[, ok], treat$age[ok])
-ok <- which(treat_mb == "MAC")
-res_mb_mac <- runRegression2(counts_ok[, ok], treat$age[ok])
-
-
 # Compare to cell type resolved fold changes ####
-sc_de <- read_excel("../data/Table S6_SingleCell_DGE.xlsx", sheet = 1)
+sc_de <- read.delim("../data/Table S5_SingleCell_DGE.txt")
 
+# Generate Fig 7f ####
 par(mfrow = c(1, 2))
 ok <- grep("Alveolar_macrophage", colnames(sc_de))
 tmp <- data.frame(data.matrix(as.data.frame(sc_de[,ok])))
-rownames(tmp) <- sc_de$`Gene name`
 tmp <- tmp[which(!is.na(tmp$Alveolar_macrophage.avg_logFC)),]
 tmp <- tmp[which(tmp$Alveolar_macrophage.p_val < 0.1),]
 ok <- intersect(rownames(tmp), rownames(res_mb_mac))
@@ -148,6 +139,7 @@ genes <- c("Marco", "Awat1", "Cebpb", "Fabp1", "Atp1b1", "mt-Cytb")
 text(aframe_mac[genes, "logFC"], aframe_mac[genes, "Alveolar_macrophage.avg_logFC"], genes)
 or_mac <- c(fish$estimate, fish$conf.int[1:2])
 
+# Generate Fig 7g ####
 ok <- grep("Type_2_pneumocytes", colnames(sc_de))
 tmp <- as.data.frame(sc_de[,ok])
 tmp <- tmp[which(!is.na(tmp$Type_2_pneumocytes.avg_logFC)),]
@@ -162,9 +154,8 @@ legend("bottomright", paste("Fisher P:", signif(fish$p.value, 2),"OR:", signif(f
 genes <- c("Lyz1", "B2m", "Scd1", "H2-Q7", "mt-Nd3", "Sparc", "Scd1", "H2-K1")
 text(aframe_ep[genes, "logFC"], aframe_ep[genes, "Type_2_pneumocytes.avg_logFC"], genes)
 or_ep <- c(fish$estimate, fish$conf.int[1:2])
-dev.off()
 
-# Plot enrichment odds ratio ####
+# Generate Fig 7h ####
 tmp <- data.frame(rbind(or_mac, or_ep))
 tmp$cell <- c("mac", "ep")
 colnames(tmp) <- c("OR", "low", "high", "cell")
@@ -175,11 +166,11 @@ ggplot(tmp, aes(x = OR, y = cell)) + geom_vline(aes(xintercept = 0), size = .25,
   theme(panel.grid.minor = element_blank()) +
   xlab("Odds ratio")
 
-# Save regression results ####
-write.csv(aframe_mac, file = "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/Minibulk_MAC_wSC.csv",quote = F)
-write.csv(aframe_ep, file = "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/Minibulk_EP_wSC.csv",quote = F)
+# Generate Fig 7i ####
+seu.ica@meta.data$grouping <- factor(seu.ica@meta.data$grouping, levels = c("3m", "24m"))
+VlnPlot(SubsetData(seu.ica, subset.name = "celltype", accept.value = "Type_2_pneumocytes"), features.plot = c("H2-K1"),group.by = "grouping", cols.use = c("blue", "red"))
 
-# Highlight some example genes ####
+# Generate Fig 7j ####
 ok <- which(treat_mb == "EP")
 treat_tmp <- treat$age[ok]
 matr <- counts_ok[, ok]
@@ -187,38 +178,4 @@ matr <- matr[-which(rowSums(matr) == 0),]
 matr <- DGEList(round(matr))
 matr <- calcNormFactors(matr, method = "TMM")
 v_ep <- voom(matr)
-pdf(useDingbats = F, "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/Scd1H2K1_minibulk_boxplot.pdf", height = 5, width = 7)
-par(mfrow = c(1, 2))
-boxplot(split(v_ep$E["Scd1",], treat_tmp)[c("Y", "A")], ylab = "Normalized Expression", main = "Scd1", col = c("blue", "red"))
 boxplot(split(v_ep$E["H2-K1",], treat_tmp)[c("Y", "A")], ylab = "Normalized Expression", main = "H2-K1", col = c("blue", "red"))
-dev.off()
-
-seu.ica@meta.data$grouping <- factor(seu.ica@meta.data$grouping, levels = c("3m", "24m"))
-VlnPlot(SubsetData(seu.ica, subset.name = "celltype", accept.value = "Type_2_pneumocytes"), features.plot = c("Scd1"),group.by = "grouping", cols.use = c("blue", "red"))
-ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/Scd1_vlnPlot.pdf")
-VlnPlot(SubsetData(seu.ica, subset.name = "celltype", accept.value = "Type_2_pneumocytes"), features.plot = c("H2-K1"),group.by = "grouping", cols.use = c("blue", "red"))
-ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/H2K1_vlnPlot.pdf")
-
-ok <- which(treat_mb == "MAC")
-treat_tmp <- treat$age[ok]
-matr <- counts_ok[, ok]
-zeros <- which(rowSums(matr) == 0)
-if(length(zeros) > 0) matr <- matr[-zeros,]
-matr <- DGEList(round(matr))
-matr <- calcNormFactors(matr, method = "TMM")
-v_mac <- voom(matr)
-#boxplot(split(v_mac$E["Ear2",], treat_tmp), ylab = "Expression", main = "Ear2", col = c("red", "blue"))
-#boxplot(split(v_mac$E["Marco",], treat_tmp)[c("Y", "A")], ylab = "Expression", main = "Marco", col = c("blue", "red"))
-#boxplot(split(v_mac$E["Cd63",], treat_tmp), ylab = "Expression", main = "Cd63", col = c("red", "blue"))
-pdf(useDingbats = F, "/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/Atp1b1_mtCytb_minibulk_boxplot.pdf", height = 5, width = 7)
-par(mfrow = c(1, 2))
-boxplot(split(v_mac$E["Atp1b1",], treat_tmp)[c("Y", "A")], ylab = "Normalized Expression", main = "Atp1b1", col = c("blue", "red"))
-boxplot(split(v_mac$E["mt-Cytb",], treat_tmp)[c("Y", "A")], ylab = "Normalized Expression", main = "mt-Cytb", col = c("blue", "red"))
-dev.off()
-
-VlnPlot(SubsetData(seu.ica, subset.name = "celltype", accept.value = "Alveolar_macrophage"), features.plot = c("Atp1b1"),group.by = "grouping", cols.use = c("blue", "red"))
-ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/Atp1b1_vlnPlot.pdf")
-VlnPlot(SubsetData(seu.ica, subset.name = "celltype", accept.value = "Alveolar_macrophage"), features.plot = c("mt-Cytb"),group.by = "grouping", cols.use = c("blue", "red"))
-ggsave("/Users/lukas.simon/OneDrive/Miko/Helmholtz/Schiller/outputs/Aging Project/figs/mt-Cytb_vlnPlot.pdf")
-
-
